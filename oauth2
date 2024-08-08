@@ -1,0 +1,283 @@
+As observações não podem ser exportadas de maneira comum, nas importações. Para realizá-las será necessário um caminho um pouco mais complicado por causa do tipo de Autenticação que é necessário para isto. Ela se chama Oauth2 (Online Authentication 2), e demanda de coisas como Segredo do Cliente, Cliente ID e outras coisas.
+
+### **1º Passo - Crie uma Aplicação no Hubspot**
+
+- **Crie uma Aplicação no HubSpot:**
+    - Vá para [HubSpot Developer Account](https://developers.hubspot.com/).
+    - Navegue até "My Apps" e clique em "Create an app".
+    - Preencha as informações necessárias, como nome da aplicação, descrição e URLs de redirecionamento (por exemplo, `http://localhost` para testes locais).
+    - Em "Auth", selecione "OAuth" e adicione o escopo necessário (como `crm.objects.companies.read` e `crm.objects.companies.write`).
+    - De ao seu app um nome que te lembre a Autenticação o Oauth, como Hubspot Oauth. Depois na parte de escopos, você precisará determinar quais escopos você deseja alterar. No caso de você querer importar informações de empresas, é o `crm.company.read`. No caso de criar novos contatos é o `crm.contacts.write`, e caso queira baixar qualquer [*engajement*](https://developers.hubspot.com/docs/api/crm/engagements) de um Deal (negócio) aí é o `crm.deal.read` .
+    - Tome cuidado com os escopos, pois você pode fazer muita besteira se colocar escopos mais do que deve.
+    - Adicione um link de redirecionamento (por enquanto pode ser um padrão do tipo *https://localhost:3000/oauth-callback*, mas caso você decida seguir a trilha do ngrok, terá de mudá-lo, se for seguir pelo Flask, pode manter esse mesmo. Apenas tome cuidado que no caso de ngrok, ele **precisa** ser http***s***, e não só http
+- **Obtenha as Credenciais da Aplicação:**
+    - Após criar a aplicação, você terá acesso ao `Client ID` e `Client Secret`. Guarde essas informações.
+
+### **3º Passo - Instalar as dependências no terminal**
+
+O terminal é o ambiente que lhe permitirá cuidar desta integração por causa do [localhost](http://localhost) e tudo mais, e o caminho é este (no linux, caso o teu seja Mac ou Wn é só colocar no GPT para ele traduzir para ti): 
+
+1. Abra o terminal (Ctrl + Alt + T)
+2. Instale as dependências com o comando:
+    
+    ```bash
+    sudo apt-get update
+    sudo apt-get install jq
+    sudo apt-get install python3
+    pip install flask requests hubspot hubspot-api-client pandas jq sqlalchemy psycopg2-binary
+    ```
+    
+
+Método **Flask**
+
+O Flask já foi instalado nos pip’s acima, mas o processo desde o começo é:
+
+- **Instalar Flask:**
+    
+    ```bash
+    pip install Flask
+    ```
+    
+- **Criar um Script Flask:**
+    - No terminal, crie um arquivo chamado `app.py` :
+    
+    ```bash
+    nano app.py
+    ```
+    
+    - Ele então abrirá uma tela no terminal, e adicione o seguinte código:
+    
+    ```python
+    from flask import Flask, request, redirect
+    
+    app = Flask(__name__)
+    
+    @app.route('/')
+    def home():
+        return "Servidor Flask em execução!"
+    
+    if __name__ == "__main__":
+        app.run(port=3000)
+    ```
+    
+    - Clique em Ctrl + X e Salve clicando em S (Se estiver inglês é Y).
+- **Executar o Script Flask:**
+    - Ele voltará para o terminal, e é só executar o script flask com o comando:
+    
+    ```bash
+    python app.py
+    ```
+    
+    - Assim, segundo o port=3000, a tua porta 3000 do local host estará configurada e pronta para uso:
+
+Método **Ngrok**
+
+- **Registrar uma Conta no ngrok:**
+    - Vá para [ngrok Signup](https://dashboard.ngrok.com/signup) e crie uma conta.
+- **Verificar a Conta:**
+    - Após registrar-se, você receberá um e-mail de verificação. Siga as instruções no e-mail para verificar sua conta.
+- **Obter o Authtoken:**
+    - Faça login no painel do ngrok: ngrok Dashboard e faça o donwload do arquivo .zip do ngrok. Depois dentro do Terminal rode este comando:
+        
+        ```bash
+        sudo tar -xvzf ~/Downloads/https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -C /usr/local/bin
+        ```
+        
+    - Navegue até a seção "Your Authtoken" e copie o token fornecido.
+- **Instalar o Authtoken:**
+    - No seu terminal Linux, execute o comando para configurar o authtoken. Substitua `YOUR_AUTHTOKEN` pelo token que você copiou do painel do ngrok.
+        
+        ```bash
+        ngrok config add-authtoken token
+        ngrok authtoken token
+        ```
+        
+- Após isso, o próximo comando irá gerar um link em https para você colocar no lugar da url de redirecionamento
+    
+    ```bash
+    ngrok http 3000
+    ```
+    
+    ![image.png](https://prod-files-secure.s3.us-west-2.amazonaws.com/b2a8e4a8-5775-4472-a406-331eed714e9e/aed34a5b-1c78-45e2-b273-5b66c148a83c/image.png)
+    
+
+Caso algum processo estiver acontecendo dentro do localhost:3000, através dos seguintes comandos você poderá desativar o que estiver em funcionamento:
+
+```bash
+sudo netstat -tuln | grep 3000
+sudo ufw allow 3000/tcp
+```
+
+### **4º Passo - Obter o token de acesso da Oauth2**
+
+Com o link de redirecionamento ajustado, será necessário manter o Flask ou o Ngrok ativo em uma das abas do terminal. Na outra aba do terminal você deve seguir os passos:
+
+1. **Crie um arquivo Python para o servidor HTTP:**
+    
+    Vamos criar um arquivo chamado `oauth_server.py` (ou qualquer outro nome que desejar) e adicionar o seguinte código:
+    
+    - No terminal, crie um arquivo chamado `oauth_server.py` :
+    
+    ```bash
+    nano oauth_server.py
+    ```
+    
+    - Ele então abrirá uma tela no terminal, e adicione o seguinte código:
+    
+    ```python
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import urllib.parse as urlparse
+    import requests
+    
+    # Informações do OAuth
+    CLIENT_ID = 'CLIENT_ID' # Substitua com seu CLIENT_ID
+    CLIENT_SECRET = 'CLIENT_SECRET' # Substitua com seu CLIENT_SECRET
+    REDIRECT_URI = 'REDIRECT_URI' # Substitua com seu REDIRECT_URL
+    
+    # Classe para manipular as requisições HTTP
+    class OAuthRequestHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed_url = urlparse.urlparse(self.path)
+            query_params = urlparse.parse_qs(parsed_url.query)
+    
+            # Verifica se há um código de autorização na URL
+            if 'code' in query_params:
+                authorization_code = query_params['code'][0]
+    
+                # Trocar o código de autorização por um token de acesso
+                token_url = 'https://api.hubapi.com/oauth/v1/token'
+                data = {
+                    'grant_type': 'authorization_code',
+                    'client_id': CLIENT_ID,
+                    'client_secret': CLIENT_SECRET,
+                    'redirect_uri': REDIRECT_URI,
+                    'code': authorization_code
+                }
+    
+                # Faz a requisição POST para obter o token de acesso
+                response = requests.post(token_url, data=data)
+                token_info = response.json()
+    
+                # Exibe o token de acesso na resposta HTTP
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(f'Token de Acesso: {token_info}'.encode())
+    
+            else:
+                self.send_response(400)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write('Código de Autorização não encontrado.'.encode())  # Convertendo para bytes
+    
+    # Função para iniciar o servidor HTTP na porta 3000
+    def run_http_server(server_class=HTTPServer, handler_class=OAuthRequestHandler, port=3000):
+        server_address = ('', port)
+        httpd = server_class(server_address, handler_class)
+        print(f'Servidor HTTP rodando na porta {port}...')
+        httpd.serve_forever()
+    
+    if __name__ == '__main__':
+        run_http_server()
+    
+    ```
+    
+    - Substitua o CLIENT_ID, CLIENT_SECRET e o REDIRECT_URL pelos valores do aplicativo do Hubspot.
+    - Clique em Ctrl + X e Salve clicando em S (Se estiver inglês é Y).
+2. **Executar o Servidor HTTP:**
+    - No diretório onde você salvou o arquivo `oauth_server.py`, execute o seguinte comando para iniciar o servidor:
+        
+        ```bash
+        python oauth_server.py
+        ```
+        
+3. **Acessar a URL de Autorização:**
+    - Abra um navegador e acesse a URL de instalação de amostra (OAuth), que o próprio aplicativo da Hubspot fornece:
+        
+        ![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/b2a8e4a8-5775-4472-a406-331eed714e9e/4f976bc6-e10e-46de-a2a4-48ab565ae683/Untitled.png)
+        
+4. **Obtenção do TOKEN de acesso:**
+    - Nesta nova aba, selecione a sua conta principal do Hubspot (a que deseja importar ou exportar os dados) e siga o processo até que a tela dê em uma pequena linha de código que irá conter os seguintes valores:
+    
+    ```json
+    {
+      "token_type": "bearer",
+      "refresh_token": "98883d4e-124e-483c-be9c6278138",
+      "access_token": "CNLA9NSEMhISAAEAAEAAAAIAAAAIAAAAAACAGKaSpgkgsaaiDCjVkNQBMhT1ARFt0GHOJec_tiTPMjkgFY6pUzo6AAAAQQAAAAAAAAAAAAAAABgAAAAAAAAAAAA4AAAAAAAAAAAAcAAAAAGAAAAAAAAAAAAAAAUIUoaImj32iuDTvbji4lpEr5eK_r2hKA25hMVIAWgBgAA",
+      "expires_in": 1800
+    }
+    ```
+    
+    - **token_type**: Indica o tipo de token, que no caso é `bearer`, conforme padrão OAuth 2.0.
+    - **refresh_token**: Um token utilizado para obter um novo token de acesso quando o atual expira.
+    - **access_token**: O token de acesso que você usará para autenticar e acessar recursos protegidos na API do HubSpot. Este token é usado nas requisições HTTP como um cabeçalho `Authorization: Bearer <access_token>`.
+    - **expires_in**: O tempo em segundos até o token de acesso expirar. No exemplo, ele expira em 1800 segundos (30 minutos).
+5. Para testar se deu certo, no Terminal, você pode rodar este comando:
+    
+    ```bash
+    curl -X GET \
+      'https://api.hubapi.com/crm/v3/companies' \
+      -H 'Authorization: Bearer seu_token_oauth_aqui' \
+      -H 'Content-Type: application/json'
+    ```
+    
+    - Substitua `seu_token_oauth_aqui` pelo seu token OAuth válido.
+    - Este comando realiza uma requisição GET para a API de empresas do HubSpot. Ele envia seu token OAuth no cabeçalho `Authorization` com o prefixo `Bearer`.
+    - Também é possível testar pelo Postman, mas questione o GPT como fazê-lo que ele lhe orientará.
+
+### **4º Passo - Obter o token de acesso da Oauth2**
+
+Você pode se utilziar de um código em python ou outra linguagem no Databricks, ou pode executar no próprio Terminal:
+
+- Crie um script shell (arquivo.sh) com o comando no Terminal (Substitua ‘arquivo’ pelo nome que deseja):
+    
+    ```bash
+    nano arquivo.sh
+    ```
+    
+- Clique em Ctrl + X e Salve clicando em S (Se estiver inglês é Y).
+- E dentro deste arquivo, você adiciona o código da importação ou exportação que deseja fazer. Dentro deste código, provavelmente você precisará o novo Token que conseguiu, ou caso queira deixar automatizado por causa do tempo de expiração, coloque o CLIENT_ID, CLIENT_SECRET e o REFRESH_TOKEN no seu código
+- É necessário executar o seguinte comando para que ele o seu arquivo .sh seja executável:
+    
+    ```bash
+    chmod +x arquivo.sh
+    ```
+    
+- Por último você executa o [arquivo.sh](http://arquivo.sh) no Terminal com o comando:
+    
+    ```bash
+    ./arquivo.sh
+    ```
+    
+
+### **4.1º Passo - Obtenção de um código que te ajude:**
+
+O código de integração pode ser obtido pelo próprio GPT, por isso aqui tem algumas sugestões de prompt para o ChatGPT, Copilot ou o que usar:
+
+> *“Você é um especialista de CRM e Hubspot, Banco de Dados, Databricks, Python e SQL, importação e exportação de dados. Eu preciso exportar do Hubspot todas as notes com todas as suas propriedades em um arquivo .csv . Me entregue em um código como devo fazê-lo segundo as documentações de API do Hubspot de modo mais eficaz, com menor consumo do sistema operacional e com comentários ao longo do código para facilitar o meu entendimento.”*
+> 
+
+Outro prompt que pode lhe ajudar para pedir as coisas para o GPT é em outra conversa pedir isso:
+
+> *Você é um especialista de CRM e Hubspot, Banco de Dados, Python e SQL, importação e exportação de dados. Eu vou exportar do Hubspot todas as propriedades dos Deals em um arquivo csv. Preciso de um lista com o nome interno de todas as associações dos Deals no HUbspot*
+> 
+
+---
+
+### Documentações Adicionais
+
+[Hubspot CRM API Documentation | Associações](https://developers.hubspot.com/docs/api/crm/associations)
+
+[Hubspot CRM API Documentation | Engagements](https://developers.hubspot.com/docs/api/crm/engagements)
+
+[Hubspot CRM API Documentation | Understanding the CRM](https://developers.hubspot.com/docs/api/crm/understanding-the-crm)
+
+[Hubspot CRM API Documentation | Developer Guides Resources](https://developers.hubspot.com/docs/api/developer-guides-resources)
+
+[Hubspot CRM API Documentation | Intro to Auth](https://developers.hubspot.com/docs/api/intro-to-auth)
+
+[Hubspot CRM API Documentation | Usage Details](https://developers.hubspot.com/docs/api/usage-details)
+
+[HubSpot API Reference](https://developers.hubspot.com/docs/api/overview)
+
+[HA | Integrating With HubSpot I: Foundations - A Introducition to Using Oauth With Hubspot](https://app.hubspot.com/academy/19499302/tracks/1092124/1093820/2967?language=en)
