@@ -7,6 +7,7 @@ There will be 3 parts in special:
 - API integration with a Private App
 
 Some documentation can help you:
+
 [Hubspot CRM API Documentation | Associações](https://developers.hubspot.com/docs/api/crm/associations)
 
 [Hubspot CRM API Documentation | Engagements](https://developers.hubspot.com/docs/api/crm/engagements)
